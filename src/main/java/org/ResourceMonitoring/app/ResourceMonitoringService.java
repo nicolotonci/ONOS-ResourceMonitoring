@@ -33,6 +33,7 @@ import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.host.HostService;
 import org.onosproject.net.link.LinkService;
 import org.onosproject.net.meter.*;
+import org.onosproject.net.topology.PathService;
 import org.onosproject.net.topology.TopologyService;
 import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Activate;
@@ -60,7 +61,7 @@ import static org.onlab.util.Tools.get;
 public class ResourceMonitoringService {
 
     // link capacity in terms of Mbps
-    public final static int LINK_CAPACITY = 100;
+    public final static int LINK_CAPACITY = 10;
 
     public final static short DEFAULT_GROUP = 0;
 
@@ -87,6 +88,9 @@ public class ResourceMonitoringService {
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected LinkService linkService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected PathService pathService;
 
 
     private final Logger log = LoggerFactory.getLogger(getClass());
@@ -149,29 +153,27 @@ public class ResourceMonitoringService {
         log.info("Reconfigured");
     }
 
-
+    /* Establish a connection between the two specified hosts with the specified bandwidth, if possible */
     public void createConnection(final HostId from, final HostId to, final int bandwidth) throws Error{
         HostLocation sourceHostLocation = hostService.getHost(from).location();
         HostLocation destinationHostLocation = hostService.getHost(to).location();
 
-        IpPrefix sourcePrefix = getIpPrefix(from);
-        IpPrefix destPrefix = getIpPrefix(to);
+        IpPrefix sourcePrefix = Helper.getIpPrefix(hostService, from);
+        IpPrefix destPrefix = Helper.getIpPrefix(hostService, to);
 
         // check the existence of a connection between the two hosts
         if (isAlreadyInstalled(sourcePrefix, destPrefix))
             throw new Error("Another connection already exists with those endpoints!");
 
         // Retrieve all possible paths form source to destination
-        Set<Path> allPaths = topologyService.getPaths(topologyService.currentTopology(), sourceHostLocation.deviceId(), destinationHostLocation.deviceId());
-
-        // Find the shortest path with enough bandwidth
-        Optional<Path> shortestPath = allPaths.stream()
-                                              .sorted(shorterPath())
-                                              .filter(hasEnoughResource(bandwidth))
-                                              .findFirst();
+        // Pick the shortest path with enough bandwidth
+        Optional<Path> shortestPath = pathService.getKShortestPaths(sourceHostLocation.elementId(),destinationHostLocation.elementId())
+                                                 //.sorted(shorterPath())
+                                                 .filter(hasEnoughResource(bandwidth))
+                                                 .findFirst();
 
         if (shortestPath.isEmpty())
-            throw new Error("No path found from source to destination with enough capacity");
+            throw new Error("No path found from source to destination with enough capacity! :(");
 
 
         // save the current connection
@@ -183,39 +185,67 @@ public class ResourceMonitoringService {
             AllocateBandwidth(l, bandwidth);
             AllocateBandwidth(getOppositeLink(l), bandwidth);
         }
-        //traversedLinks.forEach(l -> AllocateBandwidth(l, bandwidth));
 
 
-        // install rule on the first switch of the path
-        installDuplexRule(sourceHostLocation.deviceId(), sourceHostLocation.port(), traversedLinks.get(0).src().port(), sourcePrefix, destPrefix, bandwidth);
-
+        // install rules on the first switch of the path
+        installRule(
+                sourceHostLocation.deviceId(),
+                sourceHostLocation.port(),
+                traversedLinks.get(0).src().port(),
+                sourcePrefix,
+                destPrefix,
+                bandwidth
+        );
+        installRule(
+                sourceHostLocation.deviceId(),
+                traversedLinks.get(0).src().port(),
+                sourceHostLocation.port(),
+                destPrefix,
+                sourcePrefix,
+                -1 // do not install meter here
+        );
 
         for(int i = 0;  i < traversedLinks.size()-1; i++){
             DeviceId device = traversedLinks.get(i).dst().deviceId();
             PortNumber incoming = traversedLinks.get(i).dst().port();
             PortNumber outgoing = traversedLinks.get(i+1).src().port();
 
-            installDuplexRule(device, incoming, outgoing, sourcePrefix, destPrefix, bandwidth);
+            installDuplexRule(device, incoming, outgoing, sourcePrefix, destPrefix);
         }
 
-        // install rule on destination edge switch
+        // install rules on destination edge switch
         PortNumber incoming = traversedLinks.get(traversedLinks.size()-1).dst().port();
-        installDuplexRule(destinationHostLocation.deviceId(), incoming, destinationHostLocation.port(), sourcePrefix, destPrefix, bandwidth);
-
+        installRule(
+                destinationHostLocation.deviceId(),
+                incoming,
+                destinationHostLocation.port(),
+                sourcePrefix,
+                destPrefix,
+                -1 // do not install meter
+        );
+        installRule(
+                destinationHostLocation.deviceId(),
+                destinationHostLocation.port(),
+                incoming,
+                destPrefix,
+                sourcePrefix,
+                bandwidth
+        );
     }
 
+    /* Delete the connection between the to specified hosts if established */
     public void deleteConnection(HostId from, HostId to) throws Error{
         Iterable<FlowRule> flowRules = flowRuleService.getFlowRulesByGroupId(this.appId, DEFAULT_GROUP);
 
-        IpPrefix sourcePrefix = getIpPrefix(from);
-        IpPrefix destPrefix = getIpPrefix(to);
+        IpPrefix sourcePrefix = Helper.getIpPrefix(hostService, from);
+        IpPrefix destPrefix = Helper.getIpPrefix(hostService, to);
 
         Optional<Connection> connection = connections.keySet().stream()
                                                               .filter(hasEndpoints(sourcePrefix, destPrefix))
                                                               .findFirst();
 
         if (connection.isEmpty())
-            throw new Error("No connection found between " + sourcePrefix.toString() + " -> " + destPrefix.toString());
+            throw new Error("No connection found between " + sourcePrefix.toString() + " -> " + destPrefix.toString() + " ! :(");
 
 
         ArrayList<ImmutablePair<DeviceId, MeterId>>  meters = new ArrayList<>();
@@ -243,7 +273,9 @@ public class ResourceMonitoringService {
         connections.remove(connection.get());
     }
 
+    /* check if the traffic selector t is the one that implements Connection c */
     private boolean isSelectorOfConnection(TrafficSelector t, Connection c){
+        // To make the verification the Criterion is converted to string, trimmed from the pointless part and then compared */
         return ((t.getCriterion(Criterion.Type.IPV4_SRC).toString().substring(9).equals(c.source.toString()) &&
                 t.getCriterion(Criterion.Type.IPV4_DST).toString().substring(9).equals(c.destination.toString())) || (
                 t.getCriterion(Criterion.Type.IPV4_SRC).toString().substring(9).equals(c.destination.toString()) &&
@@ -251,6 +283,7 @@ public class ResourceMonitoringService {
                 ));
     }
 
+    /* Predicate to filter paths that have at least the specified bandwidth */
     private Predicate<Path> hasEnoughResource(final int bandwidth) {
         return p -> {
             for (Link l : p.links())
@@ -261,10 +294,12 @@ public class ResourceMonitoringService {
         };
     }
 
+    /* Comparator to sort Paths */
     private Comparator<Path> shorterPath(){
-        return (p1, p2) -> p2.links().size() - p1.links().size();
+        return (p1, p2) -> p1.links().size() - p2.links().size();
     }
 
+    /* Allocate bandwidth (in the local Link Status data structure) for the specified link */
     private void AllocateBandwidth(Link l, int bandwidth){
         if (availableBandwidth.containsKey(l))
             availableBandwidth.merge(l, (-bandwidth), Integer::sum);
@@ -272,15 +307,19 @@ public class ResourceMonitoringService {
             availableBandwidth.put(l, (LINK_CAPACITY - bandwidth));
     }
 
+    /* Free allocated bandwidth (in the local Link Status data structure)  for the specified link */
     private void DeallocateBandwidth(Link l, int bandwidth){
         availableBandwidth.merge(l, bandwidth, Integer::sum);
     }
 
-    private void installDuplexRule(DeviceId device, PortNumber a, PortNumber b, IpPrefix ip_a, IpPrefix ip_b, int bandwidth){
-        installRule(device, a, b, ip_a, ip_b, bandwidth);
-        installRule(device, b, a, ip_b, ip_a, bandwidth);
+    /* This method install rules on intermediate switches
+    * Band is set to -1 to not install meters */
+    private void installDuplexRule(DeviceId device, PortNumber a, PortNumber b, IpPrefix ip_a, IpPrefix ip_b){
+        installRule(device, a, b, ip_a, ip_b, -1);
+        installRule(device, b, a, ip_b, ip_a, -1);
     }
 
+    /* Create and install a single rule to the specified device with specified parameters */
     private void installRule(DeviceId device, PortNumber incomingPort, PortNumber outgoingPort, IpPrefix srcPrefix, IpPrefix destPrefix, int bandwidth){
         // Selector
         TrafficSelector selector = DefaultTrafficSelector.builder()
@@ -290,11 +329,15 @@ public class ResourceMonitoringService {
                 .matchIPDst(destPrefix)
                 .build();
 
-        // Treatment
-        TrafficTreatment treatment = DefaultTrafficTreatment.builder()
-                .setOutput(outgoingPort)
-                .meter(this.createMeter(device, bandwidth).id())
-                .build();
+        // Treatment builder
+        TrafficTreatment.Builder treatmentBuilder = DefaultTrafficTreatment.builder()
+                .setOutput(outgoingPort);
+
+        // if the bandwidth is set greater than 0 install meter, otherwise do not install meter
+        if (bandwidth > 0)
+            treatmentBuilder.meter(this.createMeter(device, bandwidth).id());
+
+        TrafficTreatment treatment = treatmentBuilder.build();
 
         // Forward Objective
         ForwardingObjective forwardingObjective = DefaultForwardingObjective.builder()
@@ -312,33 +355,34 @@ public class ResourceMonitoringService {
 
     }
 
-    private IpPrefix getIpPrefix(HostId host){
-        IpAddress ip = hostService.getHost(host).ipAddresses().stream().findFirst().get();
-        return IpPrefix.valueOf(ip, IpPrefix.MAX_INET_MASK_LENGTH);
-    }
-
+    /* Create and submit to the specified device a meter with specified bandwidth */
     private Meter createMeter(DeviceId device, int bandwidth){
-
+        // Define the Band object
         Band b = DefaultBand.builder()
                             .ofType(Band.Type.DROP)
                             .withRate(bandwidth * 1000)
+                            .burstSize(0)
                             .build();
 
+        // Create a Meter Request
         MeterRequest m =  DefaultMeterRequest.builder()
                 .forDevice(device)
                 .fromApp(this.appId)
                 .withBands(Collections.singleton(b))
                 .withUnit(Meter.Unit.KB_PER_SEC)
+                .burst()
                 .add();
-
+        // Retrieve the instantiated meter
         Meter meter = meterService.submit(m);
         return meter;
     }
 
+    /* Predicate to filter connections by source and destination IpPrefixes (or opposite order) */
     private Predicate<Connection> hasEndpoints(IpPrefix a, IpPrefix b){
         return c -> (c.destination.equals(b) && c.source.equals(a)) || (c.destination.equals(a) && c.source.equals(b));
     }
 
+    /* Check if a connection between two ipPrefix is already established in the system */
     private boolean isAlreadyInstalled(IpPrefix a, IpPrefix b){
         return connections.keySet()
                           .stream()
@@ -346,10 +390,13 @@ public class ResourceMonitoringService {
                           .count() == 1;
     }
 
+    /* Link status data structure getter */
     public Map<Link, Integer> getLinksStatus(){return this.availableBandwidth;}
 
+    /* Established connections data structure getter */
     public Map<Connection, List<Link>> getConnections(){return this.connections;}
 
+    /* Given a Link object, return a Link object of the opposite direction */
     private Link getOppositeLink(Link l){
         return linkService.getLink(l.dst(), l.src());
     }

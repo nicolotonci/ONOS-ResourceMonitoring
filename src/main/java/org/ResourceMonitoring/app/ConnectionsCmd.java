@@ -23,6 +23,8 @@ import org.onosproject.net.host.HostService;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 
 @Service
@@ -38,11 +40,19 @@ public class ConnectionsCmd extends AbstractShellCommand {
 
     @Override
     protected void doExecute() {
-        for (Map.Entry<Connection, List<Link>> e : rmS.getConnections().entrySet()){
-            Connection c = e.getKey();
-            print("%s <-> %s (%d Mbps)", c.source.toString(), c.destination.toString(), c.bandwidth);
+        Set<Map.Entry<Connection, List<Link>>> connections = rmS.getConnections().entrySet();
+
+        if (connections.isEmpty()){
+            print("No established connection! :(");
+            return;
         }
 
+        for (Map.Entry<Connection, List<Link>> e : connections) {
+            Connection c = e.getKey();
+            print("%s <-> %s (%d Mbps)", c.source.toString(), c.destination.toString(), c.bandwidth);
+            String path = e.getValue().stream().map(l -> l.dst().deviceId().toString()).collect(Collectors.joining(" <-> "));
+            print("\t Path: %s <-> %s", e.getValue().get(0).src().deviceId().toString(), path);
+        }
     }
 
 }

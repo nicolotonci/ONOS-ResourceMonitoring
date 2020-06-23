@@ -51,17 +51,6 @@ public class LinksCmd extends AbstractShellCommand {
 
             print("%s -> %s  (Capacity: %d Mbps  -  Allocated: %d Mbps - Available: %d Mbps)", srcDeviceId.toString(), dstDeviceId.toString(), rmS.LINK_CAPACITY, allocated, available);
         }
-        /*
-        for(Map.Entry<Link, Integer> e : rmS.getLinksStatus().entrySet()){
-
-            DeviceId srcDeviceId = e.getKey().src().deviceId();
-            DeviceId dstDeviceId = e.getKey().dst().deviceId();
-
-            int allocated = rmS.LINK_CAPACITY - e.getValue();
-
-            print("%s <-> %s  (Capacity: %d Mbps  -  Allocated: %d Mbps - Available: %d Mbps)", srcDeviceId.toString(), dstDeviceId.toString(), rmS.LINK_CAPACITY, allocated, e.getValue());
-        }
-*/
     }
 
 }
