@@ -54,10 +54,8 @@ import static org.onlab.util.Tools.get;
  * Skeletal ONOS application component.
  */
 @Component(immediate = true,
-        service = {ResourceMonitoringService.class}/*,
-        property = {
-                "someProperty=Some Default String Value",
-        }*/)
+        service = {ResourceMonitoringService.class}
+        )
 public class ResourceMonitoringService {
 
     // link capacity in terms of Mbps
@@ -94,9 +92,6 @@ public class ResourceMonitoringService {
 
 
     private final Logger log = LoggerFactory.getLogger(getClass());
-
-    /** Some configurable property. */
-    private String someProperty;
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected ComponentConfigService cfgService;
@@ -142,15 +137,6 @@ public class ResourceMonitoringService {
 
             this.deleteConnection(h1, h2);
         }
-    }
-
-    @Modified
-    public void modified(ComponentContext context) {
-        Dictionary<?, ?> properties = context != null ? context.getProperties() : new Properties();
-        if (context != null) {
-            someProperty = get(properties, "someProperty");
-        }
-        log.info("Reconfigured");
     }
 
     /* Establish a connection between the two specified hosts with the specified bandwidth, if possible */
@@ -235,6 +221,8 @@ public class ResourceMonitoringService {
 
     /* Delete the connection between the to specified hosts if established */
     public void deleteConnection(HostId from, HostId to) throws Error{
+        /* Note that the group concept here is simply a logical grouping of flows.
+         * This is not the same as a group in the GroupService, and this method will not return flows that are mapped to a particular Group. */
         Iterable<FlowRule> flowRules = flowRuleService.getFlowRulesByGroupId(this.appId, DEFAULT_GROUP);
 
         IpPrefix sourcePrefix = Helper.getIpPrefix(hostService, from);
