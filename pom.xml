@@ -36,7 +36,7 @@
         <onos.app.origin>Nicolo Tonci - 503919</onos.app.origin>
         <onos.app.category>default</onos.app.category>
         <onos.app.url>http://onosproject.org</onos.app.url>
-        <onos.app.readme>To be completed....</onos.app.readme>
+        <onos.app.readme>Resource Monitoring service. Developed by Nicolo Tonci</onos.app.readme>
     </properties>
 
     <dependencies>

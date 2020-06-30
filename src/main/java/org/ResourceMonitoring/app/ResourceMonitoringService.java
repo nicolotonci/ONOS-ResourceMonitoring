@@ -54,8 +54,8 @@ import static org.onlab.util.Tools.get;
  * Skeletal ONOS application component.
  */
 @Component(immediate = true,
-        service = {ResourceMonitoringService.class}
-        )
+           service = {ResourceMonitoringService.class}
+          )
 public class ResourceMonitoringService {
 
     // link capacity in terms of Mbps
@@ -137,6 +137,11 @@ public class ResourceMonitoringService {
 
             this.deleteConnection(h1, h2);
         }
+    }
+
+    @Modified
+    public void modified(ComponentContext context) {
+        log.info("Reconfigured");
     }
 
     /* Establish a connection between the two specified hosts with the specified bandwidth, if possible */
